@@ -1,0 +1,15 @@
+[workspace]
+authors = ["nugget-baguette <stakahashi138064@gmail.com>"]
+channels = ["conda-forge"]
+name = "stat-study"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+numpy = ">=2.5.4,<3"
+scipy = ">=1.18.1,<2"
+pandas = ">=3.0.6,<4"
+ipykernel = ">=7.4.0,<8"
+matplotlib = ">=3.11.2,<4"
