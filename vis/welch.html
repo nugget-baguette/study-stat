@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>パワースペクトル推定（バートレット法・Welch法・nperseg）インタラクティブ図解</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --text: #1e293b;
+    --muted: #64748b;
+    --primary: #2563eb;
+    --primary-light: #dbeafe;
+    --orange: #ea580c;
+    --orange-light: #ffedd5;
+    --border: #e2e8f0;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Meiryo", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 24px;
+    line-height: 1.6;
+  }
+  .container {
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin-bottom: 20px;
+  }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .tab-btn {
+    padding: 10px 18px;
+    border: none;
+    background: #e2e8f0;
+    color: var(--text);
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+  .tab-btn.active {
+    background: var(--primary);
+    color: white;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    background: #f1f5f9;
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.9rem;
+  }
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .metric-box {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .metric-label {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .metric-val {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--primary);
+  }
+  canvas {
+    width: 100%;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: block;
+  }
+  .step-nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .step-btn {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .step-btn.active {
+    background: var(--primary-light);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .explanation-banner {
+    margin-top: 14px;
+    padding: 12px 16px;
+    background: #eff6ff;
+    border-left: 4px solid var(--primary);
+    border-radius: 4px;
+    font-size: 0.92rem;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>パワースペクトル推定 インタラクティブ・シミュレータ</h1>
+  <div class="subtitle">1ms間隔・8時間測定データ（fs = 1000 Hz, N = 28,800,000点）における nperseg・バートレット法・Welch法の挙動</div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab(1)">① ステップ図解：区間分割・窓関数・平均の順序</button>
+    <button class="tab-btn" onclick="switchTab(2)">② nperseg と解像度・滑らかさのトレードオフ</button>
+    <button class="tab-btn" onclick="switchTab(3)">③ バートレット法 vs Welch法（スペクトル漏れ比較）</button>
+  </div>
+
+  <!-- TAB 1: Step-by-Step Pipeline -->
+  <div id="tab1" class="card">
+    <div class="controls">
+      <div class="control-group">
+        <label><strong>ステップ選択（処理の順番）</strong></label>
+        <div class="step-nav">
+          <button class="step-btn active" id="sbtn1" onclick="setStep(1)">Step 1: 区間の切り出し</button>
+          <button class="step-btn" id="sbtn2" onclick="setStep(2)">Step 2: 区間ごとに窓関数</button>
+          <button class="step-btn" id="sbtn3" onclick="setStep(3)">Step 3: 個別にFFTして2乗</button>
+          <button class="step-btn" id="sbtn4" onclick="setStep(4)">Step 4: K個のスペクトルを平均</button>
+        </div>
+      </div>
+      <div class="control-group">
+        <label><input type="checkbox" id="wrongAvgToggle" onchange="drawTab1()"> もし誤って「FFTの前に時間波形を平均」したらどうなるか表示</label>
+      </div>
+    </div>
+    <canvas id="canvas1" width="940" height="460"></canvas>
+    <div id="stepBanner" class="explanation-banner"></div>
+  </div>
+
+  <!-- TAB 2: nperseg Tradeoff -->
+  <div id="tab2" class="card hidden">
+    <div class="controls">
+      <div class="control-group" style="flex:1;">
+        <label><strong>nperseg のサイズ: 2^<span id="pVal">14</span> = <span id="npersegVal">16,384</span> 点</strong></label>
+        <input type="range" id="pSlider" min="10" max="24" step="1" value="14" oninput="drawTab2()">
+      </div>
+      <div class="control-group">
+        <label><input type="checkbox" id="showTrue2" checked onchange="drawTab2()"> 真のスペクトル形状（理論値）を表示</label>
+      </div>
+    </div>
+    <div class="metrics">
+      <div class="metric-box">
+        <div class="metric-label">1区間の時間長 T_seg</div>
+        <div class="metric-val" id="mTseg">16.38 秒</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">周波数解像度・下限 Δf</div>
+        <div class="metric-val" id="mDf">61.0 mHz</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">上限（ナイキスト周波数）</div>
+        <div class="metric-val">500 Hz (固定)</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Welch平均回数 K (50%重なり)</div>
+        <div class="metric-val" id="mK">3,514 回</div>
+      </div>
+    </div>
+    <canvas id="canvas2" width="940" height="420"></canvas>
+  </div>
+
+  <!-- TAB 3: Bartlett vs Welch -->
+  <div id="tab3" class="card hidden">
+    <div class="controls">
+      <div class="control-group" style="flex:1;">
+        <label><strong>nperseg: 2^<span id="pVal3">18</span> 点</strong></label>
+        <input type="range" id="pSlider3" min="14" max="22" step="1" value="18" oninput="drawTab3()">
+      </div>
+      <div class="control-group">
+        <label><strong>Welch オーバーラップ率</strong></label>
+        <select id="overlapSelect" onchange="drawTab3()">
+          <option value="0">0% (重なりなし)</option>
+          <option value="0.5" selected>50% (標準)</option>
+          <option value="0.75">75%</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label><input type="checkbox" id="leakagePeak" checked onchange="drawTab3()"> 1 Hz の強い干渉ピーク（スペクトル漏れ確認用）</label>
+      </div>
+    </div>
+    <div class="metrics">
+      <div class="metric-box">
+        <div class="metric-label">周波数ビン間隔 Δf</div>
+        <div class="metric-val" id="mDf3">3.81 mHz</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">バートレット平均回数</div>
+        <div class="metric-val" id="mKBart" style="color:var(--orange)">109 回</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-label">Welch平均回数</div>
+        <div class="metric-val" id="mKWelch">218 回</div>
+      </div>
+    </div>
+    <canvas id="canvas3" width="940" height="420"></canvas>
+  </div>
+</div>
+
+<script>
+let currentTab = 1;
+let currentStep = 1;
+
+function switchTab(t) {
+  currentTab = t;
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i + 1 === t));
+  document.getElementById('tab1').classList.toggle('hidden', t !== 1);
+  document.getElementById('tab2').classList.toggle('hidden', t !== 2);
+  document.getElementById('tab3').classList.toggle('hidden', t !== 3);
+  if (t === 1) drawTab1();
+  if (t === 2) drawTab2();
+  if (t === 3) drawTab3();
+}
+
+function setStep(s) {
+  currentStep = s;
+  for (let i = 1; i <= 4; i++) {
+    document.getElementById('sbtn' + i).classList.toggle('active', i === s);
+  }
+  drawTab1();
+}
+
+// ---------------- TAB 1: STEP VISUALIZER ----------------
+function drawTab1() {
+  const c = document.getElementById('canvas1');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  const wrongAvg = document.getElementById('wrongAvgToggle').checked;
+  const banner = document.getElementById('stepBanner');
+
+  const descriptions = {
+    1: "<strong>Step 1（区間の切り出し）：</strong> 全長 N の生信号を長さ nperseg の区間に分割します。バートレット法（上段）は重なりなしで K=4 個に切り出し、Welch法（下段）は半分（50%）ずつ重ねて K=7 個に切り出します。",
+    2: "<strong>Step 2（区間ひとつひとつに窓関数をかける）：</strong> 全体 N に1回かけるのではなく、<strong>切り出した各区間に毎回</strong>窓関数をかけます。バートレット法はそのままぶつ切りにするため両端に段差（赤丸）が残りますが、Welch法は各区間に山型のハニング窓をかけるため、すべての区間の両端が滑らかに 0 になります。",
+    3: "<strong>Step 3（個別にFFTして2乗パワー化）：</strong> 生の波形のまま平均するのではなく、<strong>各区間を個別にFFTして絶対値の2乗 |FFT|²（正のパワー）に変換</strong>します。バートレット法は両端の段差のせいで全区間のスペクトルに偽の裾野（漏れ）が出ます。",
+    4: "<strong>Step 4（最後にK個のパワースペクトルを平均）：</strong> K個の |FFT|² を足し合わせて平均します。Welch法は各区間の漏れがなく、かつ平均回数も約2倍多いため、裾野が綺麗で滑らかなPSDが完成します。"
+  };
+  banner.innerHTML = descriptions[currentStep];
+
+  // Divider
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(20, 225);
+  ctx.lineTo(920, 225);
+  ctx.stroke();
+
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillStyle = "#ea580c";
+  ctx.fillText("【バートレット法】 矩形窓（窓なし） ＋ オーバーラップ 0%", 25, 28);
+  ctx.fillStyle = "#2563eb";
+  ctx.fillText("【Welch法】 各区間にハニング窓 ＋ オーバーラップ 50%", 25, 255);
+
+  if (currentStep === 1 || currentStep === 2) {
+    drawTimeSegments(ctx, 40, 60, 860, 130, false, currentStep === 2);
+    drawTimeSegments(ctx, 40, 285, 860, 145, true, currentStep === 2);
+  } else if (currentStep === 3) {
+    drawIndividualSpectra(ctx, 40, 55, 860, 145, false);
+    drawIndividualSpectra(ctx, 40, 280, 860, 145, true);
+  } else if (currentStep === 4) {
+    drawAveragedSpectrum(ctx, 40, 50, 860, 150, false, wrongAvg);
+    drawAveragedSpectrum(ctx, 40, 275, 860, 150, true, wrongAvg);
+  }
+}
+
+function sigVal(t) {
+  return Math.sin(t * 0.17) * 0.65 + Math.cos(t * 0.43) * 0.35;
+}
+
+function drawTimeSegments(ctx, x0, y0, w, h, isWelch, applyWin) {
+  const K = isWelch ? 7 : 4;
+  const segW = w / 4;
+  const stepX = isWelch ? segW / 2 : segW;
+
+  for (let k = 0; k < K; k++) {
+    const sx = x0 + k * stepX;
+    const rowOffset = isWelch ? (k % 2) * 52 : 0;
+    const sy = y0 + rowOffset;
+    const sh = isWelch ? 75 : 110;
+    const midY = sy + sh / 2;
+
+    // Box
+    ctx.fillStyle = isWelch ? "rgba(37, 99, 235, 0.05)" : "rgba(234, 88, 12, 0.05)";
+    ctx.strokeStyle = isWelch ? "#93c5fd" : "#fdba74";
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(sx, sy, segW - 4, sh);
+    ctx.strokeRect(sx, sy, segW - 4, sh);
+
+    // Label
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#475569";
+    ctx.fillText(`区間${k+1}`, sx + 6, sy + 14);
+
+    // Window envelope in Step 2
+    if (applyWin) {
+      ctx.strokeStyle = isWelch ? "rgba(37,99,235,0.45)" : "rgba(234,88,12,0.45)";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      for (let i = 0; i <= 60; i++) {
+        const u = i / 60;
+        const win = isWelch ? 0.5 * (1 - Math.cos(2 * Math.PI * u)) : 1.0;
+        const px = sx + u * (segW - 4);
+        const py = midY - win * (sh * 0.38);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Waveform inside segment
+    ctx.strokeStyle = isWelch ? "#2563eb" : "#ea580c";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= 80; i++) {
+      const u = i / 80;
+      const t = (k * (isWelch ? 50 : 100)) + u * 100;
+      const win = (applyWin && isWelch) ? 0.5 * (1 - Math.cos(2 * Math.PI * u)) : 1.0;
+      const val = sigVal(t) * win;
+      const px = sx + u * (segW - 4);
+      const py = midY - val * (sh * 0.38);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+
+    // Highlight edge cliff in Bartlett Step 2
+    if (applyWin && !isWelch) {
+      ctx.fillStyle = "#dc2626";
+      ctx.beginPath();
+      ctx.arc(sx + segW - 4, midY - sigVal(k * 100 + 100) * (sh * 0.38), 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      if (k === 0) {
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillText("← 両端の高さが合わず段差（崖）になる", sx + segW + 4, sy + sh - 6);
+      }
+    }
+    if (applyWin && isWelch && k === 0) {
+      ctx.fillStyle = "#16a34a";
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillText("★各区間の両端がすべて滑らかに 0 になる（端で潰れた部分は下の区間2の頂上が救う）", sx + segW + 8, sy + 20);
+    }
+  }
+}
+
+function drawIndividualSpectra(ctx, x0, y0, w, h, isWelch) {
+  const K = isWelch ? 7 : 4;
+  const boxW = (w - (K - 1) * 10) / K;
+
+  for (let k = 0; k < K; k++) {
+    const bx = x0 + k * (boxW + 10);
+    ctx.fillStyle = "#f8fafc";
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.fillRect(bx, y0, boxW, h - 25);
+    ctx.strokeRect(bx, y0, boxW, h - 25);
+
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#334155";
+    ctx.fillText(`|FFT(区間${k+1})|²`, bx + 6, y0 + 15);
+
+    ctx.strokeStyle = isWelch ? "#2563eb" : "#ea580c";
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    for (let i = 0; i <= 50; i++) {
+      const u = i / 50;
+      const d = Math.abs(u - 0.35);
+      const peak = Math.exp(-d * d / 0.0025);
+      const leak = isWelch ? 0.02 * Math.exp(-d * 12) : 0.32 / (1 + d * 18);
+      const noise = (Math.sin(i * 1.9 + k * 2.3) * 0.5 + 0.5) * 0.18;
+      const val = Math.min(1, peak + leak + noise);
+      const px = bx + 6 + u * (boxW - 12);
+      const py = y0 + (h - 32) - val * (h - 55);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#475569";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(isWelch ? "→ 各区間に窓関数をかけたので裾野の漏れが消え、7個のスペクトルが並ぶ" : "→ 両端の段差のせいで、4個すべてのスペクトルに広い裾野（スペクトル漏れ）が乗る", x0, y0 + h - 4);
+}
+
+function drawAveragedSpectrum(ctx, x0, y0, w, h, isWelch, showWrong) {
+  ctx.fillStyle = "#f8fafc";
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.fillRect(x0, y0, w, h - 25);
+  ctx.strokeRect(x0, y0, w, h - 25);
+
+  ctx.strokeStyle = isWelch ? "#2563eb" : "#ea580c";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  for (let i = 0; i <= 200; i++) {
+    const u = i / 200;
+    const d = Math.abs(u - 0.35);
+    const peak = Math.exp(-d * d / 0.0018);
+    const leak = isWelch ? 0.01 * Math.exp(-d * 15) : 0.30 / (1 + d * 15);
+    const variance = isWelch ? 0.035 : 0.075;
+    const noise = 0.08 + Math.sin(i * 1.7) * variance;
+    const val = Math.min(1, peak + leak + noise);
+    const px = x0 + 15 + u * (w - 30);
+    const py = y0 + (h - 35) - val * (h - 55);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  if (showWrong) {
+    ctx.strokeStyle = "#dc2626";
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= 200; i++) {
+      const u = i / 200;
+      const px = x0 + 15 + u * (w - 30);
+      const py = y0 + (h - 35) - (0.02 + Math.sin(i)*0.008) * (h - 55);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#dc2626";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("赤破線：FFTの前に時間波形を平均した場合（位相が打ち消し合って信号が消滅！）", x0 + 280, y0 + 24);
+  }
+
+  ctx.fillStyle = "#334155";
+  ctx.font = "bold 12px sans-serif";
+  ctx.fillText(isWelch ? "平均後のPSD（Welch法）：裾野の漏れがなく、7回平均でノイズフロアも滑らか" : "平均後のPSD（バートレット法）：4回平均しても両端段差による偽の裾野（漏れ）は消えない", x0 + 12, y0 + h - 6);
+}
+
+// ---------------- TAB 2: NPERSEG SIMULATOR ----------------
+function drawTab2() {
+  const p = parseInt(document.getElementById('pSlider').value);
+  const showTrue = document.getElementById('showTrue2').checked;
+  const nperseg = Math.pow(2, p);
+  const fs = 1000;
+  const N = 28800000;
+  const Tseg = nperseg / fs;
+  const df = fs / nperseg;
+  const K = Math.max(1, Math.floor((N - nperseg / 2) / (nperseg / 2)));
+
+  document.getElementById('pVal').textContent = p;
+  document.getElementById('npersegVal').textContent = nperseg.toLocaleString();
+  document.getElementById('mTseg').textContent = Tseg >= 60 ? (Tseg / 60).toFixed(1) + " 分 (" + Tseg.toFixed(0) + "秒)" : Tseg.toFixed(2) + " 秒";
+  document.getElementById('mDf').textContent = df < 1 ? (df * 1000).toFixed(2) + " mHz" : df.toFixed(2) + " Hz";
+  document.getElementById('mK').textContent = K.toLocaleString() + " 回";
+
+  const c = document.getElementById('canvas2');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  const padL = 70, padR = 30, padT = 25, padB = 45;
+  const pw = c.width - padL - padR;
+  const ph = c.height - padT - padB;
+
+  const logFMin = -4.5, logFMax = Math.log10(500);
+  const logPMin = -6, logPMax = 2;
+
+  const xOf = (logf) => padL + ((logf - logFMin) / (logFMax - logFMin)) * pw;
+  const yOf = (logp) => padT + ph - ((logp - logPMin) / (logPMax - logPMin)) * ph;
+
+  // Grid
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.fillStyle = "#64748b";
+  ctx.font = "11px sans-serif";
+  for (let lf = -4; lf <= 2; lf++) {
+    const x = xOf(lf);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+    ctx.fillText(`10^${lf} Hz`, x - 18, padT + ph + 18);
+  }
+  for (let lp = -6; lp <= 2; lp += 2) {
+    const y = yOf(lp);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + pw, y); ctx.stroke();
+    ctx.fillText(`10^${lp}`, 18, y + 4);
+  }
+
+  // Unobservable region shade (f < df)
+  const xCut = xOf(Math.log10(df));
+  ctx.fillStyle = "rgba(148, 163, 184, 0.18)";
+  ctx.fillRect(padL, padT, Math.max(0, xCut - padL), ph);
+  ctx.strokeStyle = "#ef4444";
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(xCut, padT); ctx.lineTo(xCut, padT + ph); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#dc2626";
+  ctx.font = "bold 12px sans-serif";
+  ctx.fillText(`← 下限 Δf (${df < 1 ? (df*1000).toFixed(1)+' mHz' : df.toFixed(2)+' Hz'}) より低周波は分解不可`, Math.min(xCut + 8, padL + pw - 290), padT + 20);
+
+  function truePSD(f) {
+    const oneOverF = 1e-3 / f;
+    const white = 1e-5;
+    const peakLow = 0.08 * Math.exp(-Math.pow((Math.log10(f) - Math.log10(0.05)) / 0.04, 2));
+    const peak50 = 0.02 * Math.exp(-Math.pow((Math.log10(f) - Math.log10(50)) / 0.02, 2));
+    return oneOverF + white + peakLow + peak50;
+  }
+
+  if (showTrue) {
+    ctx.strokeStyle = "#94a3b8";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    for (let i = 0; i <= 300; i++) {
+      const lf = logFMin + (i / 300) * (logFMax - logFMin);
+      const f = Math.pow(10, lf);
+      const lp = Math.log10(truePSD(f));
+      const px = xOf(lf), py = yOf(lp);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Simulated Welch curve from df to 500 Hz
+  ctx.strokeStyle = "#2563eb";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const startLf = Math.log10(df);
+  const steps = 320;
+  for (let i = 0; i <= steps; i++) {
+    const lf = startLf + (i / steps) * (logFMax - startLf);
+    const f = Math.pow(10, lf);
+    const base = truePSD(f);
+    const stdFactor = 1.0 / Math.sqrt(K);
+    const pseudoRand = Math.sin(i * 12.7 + p) * Math.cos(i * 5.3);
+    const noisy = base * Math.pow(10, pseudoRand * 0.45 * stdFactor);
+    const px = xOf(lf), py = yOf(Math.log10(noisy));
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+}
+
+// ---------------- TAB 3: BARTLETT VS WELCH ----------------
+function drawTab3() {
+  const p = parseInt(document.getElementById('pSlider3').value);
+  const overlap = parseFloat(document.getElementById('overlapSelect').value);
+  const hasPeak = document.getElementById('leakagePeak').checked;
+
+  const nperseg = Math.pow(2, p);
+  const fs = 1000, N = 28800000;
+  const df = fs / nperseg;
+  const KBart = Math.max(1, Math.floor(N / nperseg));
+  const hop = nperseg * (1 - overlap);
+  const KWelch = Math.max(1, Math.floor((N - nperseg * overlap) / hop));
+
+  document.getElementById('pVal3').textContent = p;
+  document.getElementById('mDf3').textContent = (df * 1000).toFixed(2) + " mHz";
+  document.getElementById('mKBart').textContent = KBart.toLocaleString() + " 回";
+  document.getElementById('mKWelch').textContent = KWelch.toLocaleString() + " 回";
+
+  const c = document.getElementById('canvas3');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  const padL = 70, padR = 30, padT = 25, padB = 45;
+  const pw = c.width - padL - padR;
+  const ph = c.height - padT - padB;
+  const logFMin = -3, logFMax = 2;
+  const logPMin = -6.5, logPMax = 1.5;
+
+  const xOf = (lf) => padL + ((lf - logFMin) / (logFMax - logFMin)) * pw;
+  const yOf = (lp) => padT + ph - ((lp - logPMin) / (logPMax - logPMin)) * ph;
+
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.fillStyle = "#64748b";
+  ctx.font = "11px sans-serif";
+  for (let lf = -3; lf <= 2; lf++) {
+    const x = xOf(lf);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+    ctx.fillText(`10^${lf} Hz`, x - 18, padT + ph + 18);
+  }
+  for (let lp = -6; lp <= 1; lp += 2) {
+    const y = yOf(lp);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + pw, y); ctx.stroke();
+    ctx.fillText(`10^${lp}`, 18, y + 4);
+  }
+
+  function plotCurve(isWelch) {
+    ctx.strokeStyle = isWelch ? "#2563eb" : "#ea580c";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const K = isWelch ? KWelch : KBart;
+    const startLf = Math.max(logFMin, Math.log10(df));
+    for (let i = 0; i <= 320; i++) {
+      const lf = startLf + (i / 320) * (logFMax - startLf);
+      const f = Math.pow(10, lf);
+      let val = 1e-3 / f + 1e-6;
+      if (hasPeak) {
+        const dfPeak = Math.abs(f - 1.0);
+        const core = 2.0 * Math.exp(-Math.pow(dfPeak / (isWelch ? 0.035 : 0.022), 2));
+        const skirt = isWelch
+          ? 1e-7 / (1 + Math.pow(dfPeak / 0.02, 6))
+          : 2.5e-3 / (1 + Math.pow(dfPeak / 0.015, 2));
+        val += core + skirt;
+      }
+      const jitter = Math.sin(i * (isWelch ? 9.1 : 7.3) + p) * (0.45 / Math.sqrt(K));
+      val *= Math.pow(10, jitter);
+      const px = xOf(lf), py = yOf(Math.log10(val));
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+
+  plotCurve(false);
+  plotCurve(true);
+
+  // Legend
+  ctx.font = "bold 12px sans-serif";
+  ctx.fillStyle = "#ea580c";
+  ctx.fillText("■ バートレット法（矩形窓・重なり0%）：1Hzピークの裾野が大きく漏れ出し、周辺のノイズフロアを塗りつぶす", padL + 15, padT + 20);
+  ctx.fillStyle = "#2563eb";
+  ctx.fillText("■ Welch法（ハニング窓）：スペクトル漏れがピタッと抑えられ、本来の1/fスロープと白色雑音フロアが正確に見える", padL + 15, padT + 40);
+}
+
+// Initial draw
+drawTab1();
+</script>
+</body>
+</html>
